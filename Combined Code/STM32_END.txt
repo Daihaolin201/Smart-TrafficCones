@@ -1,0 +1,172 @@
+#include "mbed.h"
+#include "C12832.h"
+
+// Define the states of the state machine
+enum State {
+    START_PAGE,
+    REMOTE_CONTROL,
+    REQUEST_INFO,
+    DISTANCE_KEEP
+};
+
+C12832 lcd(D11, D13, D12, D7, D10);
+Serial usart(PA_11, PA_12, 115200);  // TX, RX
+
+DigitalIn sw_up(A2);
+DigitalIn sw_down(A3);
+DigitalIn sw_left(A4);
+DigitalIn sw_right(A5);
+InterruptIn sw_center(D4);  // Use interrupt input
+
+volatile State currentState = START_PAGE;  // Use volatile keyword, modified in interrupts
+volatile bool displayNeedsUpdate = true;   // Initially true to ensure first display
+
+void sendCommand(const char* command) {
+    char buffer[128];
+    const char* stateStrings[] = {"START_PAGE", "REMOTE_CONTROL", "REQUEST_INFO", "DISTANCE_KEEP"};
+    snprintf(buffer, sizeof(buffer), "%s: %s\n", stateStrings[currentState], command);
+    usart.puts(buffer);
+}
+
+void displayPage() {
+    lcd.cls();
+    lcd.locate(0, 3);
+    switch(currentState) {
+        case START_PAGE:
+            lcd.printf("Start Page\nPress CENTER");
+            break;
+        case REMOTE_CONTROL:
+            lcd.printf("Remote Control Mode\nUse ARROWS");
+            break;
+        case REQUEST_INFO:
+            lcd.printf("Request Info Mode\nPress UP");
+            break;
+        case DISTANCE_KEEP:
+            lcd.printf("Set targetDistance: %d cm\nPress UP\nUse ARROWS TO SET", 20);
+            break;
+    }
+}
+
+void centerPressed() {
+    currentState = static_cast<State>((currentState + 1) % 4);
+    displayNeedsUpdate = true;
+    sendCommand("CHANGE_STATE");
+}
+
+void processRemoteControl() {
+    if (sw_up.read()) sendCommand("FORWARD");
+    else if (sw_down.read()) sendCommand("BACKWARD");
+    else if (sw_left.read()) sendCommand("LEFT");
+    else if (sw_right.read()) sendCommand("RIGHT");
+    else sendCommand("Stop");
+    wait_ms(50);
+}
+
+void requestInfo() {
+    if (sw_up.read()) {
+        sendCommand("REQUEST_INFO");
+        lcd.cls();
+        lcd.locate(0, 3);
+        lcd.printf("Requesting Info...");
+    }
+
+    if (usart.readable()) {
+        static char buffer[128];
+        static int pos = 0;
+        char c = usart.getc();
+
+        if (c != '\n' && pos < sizeof(buffer) - 1) {
+            buffer[pos++] = c;
+            return;
+        }
+
+        buffer[pos] = '\0';
+        double distance;
+        long pulseA, pulseB;
+        sscanf(buffer, "%lf,%ld,%ld", &distance, &pulseA, &pulseB);
+
+        lcd.cls();
+        lcd.locate(0, 0);
+        lcd.printf("Distance: %.2f cm", distance);
+        lcd.locate(0, 10);
+        lcd.printf("PulseA: %ld PulseB: %ld", pulseA, pulseB);
+        pos = 0;
+    }
+}
+
+void keepDistance() {
+    static int targetDistance = 20;  // Initial target distance set to 20 cm
+    static bool needsUpdate = false; // Flag to indicate if LCD display needs updating
+
+    // Adjust the distance using left and right buttons
+    if (sw_right.read()) {
+        if (targetDistance < 100) {
+            targetDistance += 10;  // Increase distance by 10 cm
+            wait_ms(200);          // Debounce delay
+            needsUpdate = true;
+        }
+    } else if (sw_left.read()) {
+        if (targetDistance > 20) {
+            targetDistance -= 10;  // Decrease distance by 10 cm
+            wait_ms(200);          // Debounce delay
+            needsUpdate = true;
+        }
+    }
+
+    // Update display if distance changed
+    if (needsUpdate) {
+        lcd.cls();
+        lcd.locate(0, 0);
+        lcd.printf("Set targetDistance: %d cm", targetDistance);
+        needsUpdate = false; // Reset the update flag after updating
+    }
+
+    // Send commands and update display based on button presses
+    if (sw_down.read()) {
+        sendCommand("Start");
+        lcd.cls();
+        lcd.locate(0, 0);
+        lcd.printf("Start!!!");
+        wait_ms(500); // Delay after sending command
+        needsUpdate = true; // Mark display to be updated
+    }
+
+    if (sw_up.read()) {
+        char buffer[32];
+        sprintf(buffer, "SET %d", targetDistance);
+        sendCommand(buffer);
+        lcd.cls();
+        lcd.locate(0, 0);
+        lcd.printf("Distance Sent: %d cm", targetDistance);
+        wait_ms(500); // Delay after sending command
+        needsUpdate = true; // Mark display to be updated
+    }
+}
+
+
+int main() {
+    sw_center.rise(&centerPressed);
+    lcd.cls();
+    displayPage();
+
+    while(true) {
+        if (displayNeedsUpdate) {
+            displayPage();
+            displayNeedsUpdate = false;
+        }
+
+        switch(currentState) {
+            case DISTANCE_KEEP:
+                keepDistance();
+                break;
+            case REMOTE_CONTROL:
+                processRemoteControl();
+                break;
+            case REQUEST_INFO:
+                requestInfo();
+                break;
+            default:
+                break;
+        }
+    }
+}

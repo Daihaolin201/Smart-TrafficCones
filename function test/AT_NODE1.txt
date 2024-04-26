@@ -1,0 +1,16 @@
+#include "mbed.h" 
+#include "C12832.h" 
+C12832 lcd(D11, D13, D12, D7, D10); 
+Serial usart(PA_11,PA_12);  
+int main() { 
+    char str1[]="hello"; 
+    DigitalOut greenLED(PC_7);  
+    greenLED = 0; 
+    usart.baud(9600); 
+    lcd.locate (0,3);   
+    while(true) { 
+        if (usart.writeable() )  
+            usart.puts (str1); 
+        wait (5.0); 
+    } 
+}

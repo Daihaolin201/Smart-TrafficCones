@@ -1,0 +1,20 @@
+#include "mbed.h"
+#include "C12832.h"
+C12832 lcd (D11, D13, D12, D7, D10);
+Serial usart (PA_11,PA_12);
+char str [100] = {0};
+void callback ()
+{
+    if (usart.readable()) {
+        usart.gets(str, 6);
+        lcd.printf("%s", str);
+    }
+}
+int main()
+{
+    DigitalOut redLED(PB_4);
+    lcd.locate (0,3);
+    usart.baud(9600);
+    usart.attach (&callback);
+    while (1);
+}
